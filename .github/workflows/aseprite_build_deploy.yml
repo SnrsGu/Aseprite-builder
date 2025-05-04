@@ -25,7 +25,7 @@ jobs:
     - name: Get latest version info
       id: version_info
       run: |
-        data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/186770485)
+        data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/193580768)
         LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
         DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[].browser_download_url')
         VERSION_INFO=$(echo "${data}" | jq -r '.body')
@@ -66,13 +66,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        # os: [windows-latest, ubuntu-latest, macOS-latest]
-        os: [ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macOS-latest]
         arch: [x64]
-        # include:
-        #   - os: macOS-latest
-        #     arch: arm64
-      fail-fast: false    
+        include:
+          - os: macOS-latest
+            arch: arm64
+      fail-fast: false
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v2
