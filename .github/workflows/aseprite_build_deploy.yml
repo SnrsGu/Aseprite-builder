@@ -131,11 +131,45 @@ jobs:
       - name: (Windows) Setting Visual Studio build environment variables and paths
         if: matrix.os == 'windows-latest'
         uses: seanmiddleditch/gha-setup-vsdevenv@v4
+      - name: (Windows) Locate OpenSSL runtime
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $cryptoCandidates = @(
+            'C:\Program Files\OpenSSL\bin\libcrypto-3-x64.dll',
+            'C:\Program Files\OpenSSL-Win64\bin\libcrypto-3-x64.dll',
+            'C:\OpenSSL\bin\libcrypto-3-x64.dll'
+          )
+
+          $crypto = $cryptoCandidates |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
+
+          if (-not $crypto) {
+            $crypto = Get-ChildItem -LiteralPath 'C:\Program Files' -Filter 'libcrypto-3-x64.dll' -File -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\OpenSSL(?:-Win64)?\\bin\\' } |
+              Select-Object -ExpandProperty FullName -First 1
+          }
+
+          if (-not $crypto) {
+            throw 'Cannot find the x64 OpenSSL 3 runtime on the Windows runner.'
+          }
+
+          $opensslBin = Split-Path -Parent $crypto
+          $opensslRoot = Split-Path -Parent $opensslBin
+          $ssl = Join-Path $opensslBin 'libssl-3-x64.dll'
+          if (-not (Test-Path -LiteralPath $ssl)) {
+            throw "Cannot find libssl-3-x64.dll next to $crypto"
+          }
+
+          "OPENSSL_ROOT_DIR=$opensslRoot" >> $env:GITHUB_ENV
+          "OPENSSL_BIN_DIR=$opensslBin" >> $env:GITHUB_ENV
+          Write-Host "Using OpenSSL from $opensslRoot"
       - name: (Windows) Run CMake
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build
         shell: cmd
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -DOPENSSL_ROOT_DIR="%OPENSSL_ROOT_DIR%" -DOPENSSL_USE_STATIC_LIBS=FALSE -G Ninja ..
       - name: (Ubuntu) Run CMake
         if: matrix.os == 'ubuntu-latest'
         working-directory: aseprite/build
@@ -181,6 +215,37 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build/bin
         run: ren aseprite.exe Aseprite.exe
+      - name: (Windows) Bundle and verify OpenSSL runtime
+        if: matrix.os == 'windows-latest'
+        working-directory: aseprite/build/bin
+        shell: pwsh
+        run: |
+          $runtimeDlls = @('libcrypto-3-x64.dll', 'libssl-3-x64.dll')
+          foreach ($dll in $runtimeDlls) {
+            $source = Join-Path $env:OPENSSL_BIN_DIR $dll
+            if (-not (Test-Path -LiteralPath $source)) {
+              throw "Required OpenSSL runtime is missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination . -Force
+          }
+
+          $license = @(
+            (Join-Path $env:OPENSSL_ROOT_DIR 'LICENSE.txt'),
+            (Join-Path $env:OPENSSL_ROOT_DIR 'license.txt'),
+            (Join-Path $env:OPENSSL_ROOT_DIR 'LICENSE')
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if ($license) {
+            Copy-Item -LiteralPath $license -Destination 'LICENSE-OpenSSL.txt' -Force
+          } else {
+            Write-Warning 'OpenSSL license file was not found in the runner installation.'
+          }
+
+          Get-Item Aseprite.exe, libcrypto-3-x64.dll, libssl-3-x64.dll |
+            Select-Object Name, Length
+          & .\Aseprite.exe --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Aseprite startup check failed with exit code $LASTEXITCODE"
+          }
 
       - name: (macOS) Make App
         if: matrix.os == 'macOS-latest'
