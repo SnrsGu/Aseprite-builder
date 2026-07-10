@@ -5,11 +5,13 @@ on:
     - cron: '0 0 * * *'
   push:
     branches: [ "main" ]
+  workflow_dispatch:
   # pull_request:
   #   branches: [ "main" ]
 
 env:
   BUILD_TYPE: Release
+  SKIA_VERSION: m124-08a5439a6b
   
 jobs:
   check-version:
@@ -37,17 +39,17 @@ jobs:
         echo "${LATEST_TAG}" > ${LATEST_TAG}.txt
     - name: Load version from cache
       id: version_check
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ${{ steps.version_info.outputs.latest_tag }}.txt
         key: cached_version
     - name: Should we start new build?
       id: should_build
-      if: steps.version_check.outputs.cache-hit != 'true' && contains(steps.version_info.outputs.latest_tag, 'beta') == false && contains(steps.version_info.outputs.latest_tag, 'rc') == false
+      if: (github.event_name == 'workflow_dispatch' || steps.version_check.outputs.cache-hit != 'true') && contains(steps.version_info.outputs.latest_tag, 'beta') == false && contains(steps.version_info.outputs.latest_tag, 'rc') == false
       run: echo "should_build=true" >> $GITHUB_OUTPUT
     - name: Create Release
       id: create_release
-      if: steps.should_build.outputs.should_build
+      if: steps.should_build.outputs.should_build && github.event_name != 'workflow_dispatch'
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,45 +76,56 @@ jobs:
       fail-fast: false
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: (Windows) Install dependencies
         if: matrix.os == 'windows-latest' && matrix.arch == 'x64'
         uses: seanmiddleditch/gha-setup-ninja@v3
       - name: (Ubuntu) Install dependencies
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
-        run: sudo apt-get install -y g++ clang libc++-dev libc++abi-dev cmake ninja-build libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig1-dev fuse
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ clang cmake ninja-build libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig1-dev fuse
       - name: (macOS) Install dependencies
         if: matrix.os == 'macOS-latest'
         run: brew install ninja p7zip
       - name: Get Skia from cache
         id: skia-cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: skia
-          key: skia-${{ matrix.os }}-${{ matrix.arch }}-cache
+          key: skia-${{ env.SKIA_VERSION }}-${{ matrix.os }}-${{ matrix.arch }}
       - name: Download Skia if not in cache (linux)
         if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'ubuntu-latest'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64-libstdc++.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
+          curl --fail --location --retry 3 --output Skia-${{ runner.os }}-Release-x64.zip https://github.com/aseprite/skia/releases/download/${{ env.SKIA_VERSION }}/Skia-${{ runner.os }}-Release-x64.zip
+          unzip Skia-${{ runner.os }}-Release-x64.zip -d skia
       - name: Download Skia if not in cache (macOS x64)
         if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'macOS-latest' && matrix.arch == 'x64'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
+          curl --fail --location --retry 3 --output Skia-${{ runner.os }}-Release-x64.zip https://github.com/aseprite/skia/releases/download/${{ env.SKIA_VERSION }}/Skia-${{ runner.os }}-Release-x64.zip
+          unzip Skia-${{ runner.os }}-Release-x64.zip -d skia
       - name: Download Skia if not in cache (macOS arm64)
         if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'macOS-latest' && matrix.arch == 'arm64'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-arm64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-arm64.zip
+          curl --fail --location --retry 3 --output Skia-${{ runner.os }}-Release-arm64.zip https://github.com/aseprite/skia/releases/download/${{ env.SKIA_VERSION }}/Skia-${{ runner.os }}-Release-arm64.zip
           unzip Skia-${{ runner.os }}-Release-arm64.zip -d skia
       - name: Download Skia if not in cache (Windows)
         if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'windows-latest'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
+          curl.exe --fail --location --retry 3 --output Skia-${{ runner.os }}-Release-x64.zip https://github.com/aseprite/skia/releases/download/${{ env.SKIA_VERSION }}/Skia-${{ runner.os }}-Release-x64.zip
+          Expand-Archive -Path Skia-${{ runner.os }}-Release-x64.zip -DestinationPath skia
+      - name: Validate Skia package
+        shell: bash
+        run: |
+          test -d "skia/out/Release-${{ matrix.arch }}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            test -f "skia/out/Release-${{ matrix.arch }}/skia.lib"
+          else
+            test -f "skia/out/Release-${{ matrix.arch }}/libskia.a"
+          fi
       - name: Download Aseprite release
         run: |
-          curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
+          curl --fail --location --retry 3 --output Aseprite-source.zip ${{ needs.check-version.outputs.download_url }}
           unzip Aseprite-source.zip -d aseprite
           mkdir -p aseprite/build
       - name: (Windows) Set architecture for the produced binary
@@ -126,19 +139,28 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build
         shell: cmd
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=..\..\skia -DSKIA_LIBRARY_DIR=..\..\skia\out\Release-x64 -DSKIA_LIBRARY=..\..\skia\out\Release-x64\skia.lib -DOPENSSL_ROOT_DIR=C:\OpenSSL -DOPENSSL_USE_STATIC_LIBS=TRUE -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -G Ninja ..
       - name: (Ubuntu) Run CMake
         if: matrix.os == 'ubuntu-latest'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-x64 -G Ninja ..
+        run: |
+          CC=clang CXX=clang++ cmake \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_CXX_FLAGS:STRING=-stdlib=libstdc++ \
+            -DCMAKE_EXE_LINKER_FLAGS:STRING=-stdlib=libstdc++ \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR="$GITHUB_WORKSPACE/skia" \
+            -DSKIA_LIBRARY_DIR="$GITHUB_WORKSPACE/skia/out/Release-x64" \
+            -DSKIA_LIBRARY="$GITHUB_WORKSPACE/skia/out/Release-x64/libskia.a" \
+            -G Ninja ..
       - name: (macOS x64) Run CMake
         if: matrix.os == 'macOS-latest' && matrix.arch == 'x64'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-x64 -DSKIA_LIBRARY=../../skia/out/Release-x64/libskia.a -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR="$GITHUB_WORKSPACE/skia" -DSKIA_LIBRARY_DIR="$GITHUB_WORKSPACE/skia/out/Release-x64" -DSKIA_LIBRARY="$GITHUB_WORKSPACE/skia/out/Release-x64/libskia.a" -G Ninja ..
       - name: (macOS arm64) Run CMake
         if: matrix.os == 'macOS-latest' && matrix.arch == 'arm64'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-arm64 -DSKIA_LIBRARY=../../skia/out/Release-arm64/libskia.a -DPNG_ARM_NEON:STRING=on -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR="$GITHUB_WORKSPACE/skia" -DSKIA_LIBRARY_DIR="$GITHUB_WORKSPACE/skia/out/Release-arm64" -DSKIA_LIBRARY="$GITHUB_WORKSPACE/skia/out/Release-arm64/libskia.a" -DPNG_ARM_NEON:STRING=on -G Ninja ..
         
       - name: Run Ninja
         working-directory: aseprite/build
@@ -246,7 +268,7 @@ jobs:
           mv bin Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
           7z a -tzip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
       - name: Upload release
-        if: ((matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest') && matrix.arch == 'x64') || matrix.os == 'macOS-latest'
+        if: github.event_name != 'workflow_dispatch' && (((matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest') && matrix.arch == 'x64') || matrix.os == 'macOS-latest')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -255,3 +277,10 @@ jobs:
           asset_path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_content_type: application/zip
+      - name: Upload manual build artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
+          path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
+          if-no-files-found: error
