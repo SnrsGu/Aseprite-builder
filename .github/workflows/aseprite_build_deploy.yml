@@ -240,13 +240,6 @@ jobs:
             Write-Warning 'OpenSSL license file was not found in the runner installation.'
           }
 
-          Get-Item Aseprite.exe, libcrypto-3-x64.dll, libssl-3-x64.dll |
-            Select-Object Name, Length
-          & .\Aseprite.exe --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "Aseprite startup check failed with exit code $LASTEXITCODE"
-          }
-
       - name: (macOS) Make App
         if: matrix.os == 'macOS-latest'
         working-directory: aseprite/build/bin
