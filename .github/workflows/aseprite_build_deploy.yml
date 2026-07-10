@@ -272,6 +272,17 @@ jobs:
             Aseprite.AppDir \
             Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
 
+      - name: (Ubuntu) Package each distribution separately
+        if: matrix.os == 'ubuntu-latest'
+        working-directory: aseprite/build/bin
+        run: |
+          7z a -tzip \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb.zip \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
+          7z a -tzip \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage.zip \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
+
       - name: Clean up redundant files
         if: matrix.os == 'macOS-latest' || matrix.os == 'ubuntu-latest'
         working-directory: aseprite/build/bin
@@ -296,26 +307,26 @@ jobs:
           asset_path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_content_type: application/zip
-      - name: (Ubuntu) Upload Debian package
+      - name: (Ubuntu) Upload Debian package ZIP
         if: github.event_name != 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.check-version.outputs.upload_url }}
-          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
-          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
-          asset_content_type: application/vnd.debian.binary-package
-      - name: (Ubuntu) Upload AppImage
+          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb.zip
+          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb.zip
+          asset_content_type: application/zip
+      - name: (Ubuntu) Upload AppImage ZIP
         if: github.event_name != 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ needs.check-version.outputs.upload_url }}
-          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
-          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
-          asset_content_type: application/octet-stream
+          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage.zip
+          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage.zip
+          asset_content_type: application/zip
       - name: Upload manual build artifact
         if: github.event_name == 'workflow_dispatch' && matrix.os != 'ubuntu-latest'
         uses: actions/upload-artifact@v4
@@ -328,12 +339,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb
-          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
+          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb.zip
           if-no-files-found: error
       - name: (Ubuntu) Upload manual AppImage artifact
         if: github.event_name == 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage
-          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
+          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage.zip
           if-no-files-found: error
