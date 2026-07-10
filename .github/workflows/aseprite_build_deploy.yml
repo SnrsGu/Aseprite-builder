@@ -152,7 +152,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build
         shell: cmd
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -DUSE_SHARED_CURL=OFF -DCMAKE_USE_OPENSSL=OFF -DCMAKE_USE_LIBSSH2=OFF -DCMAKE_USE_SCHANNEL=ON -G Ninja ..
       - name: (Ubuntu) Run CMake
         if: matrix.os == 'ubuntu-latest'
         working-directory: aseprite/build
@@ -243,7 +243,9 @@ jobs:
           echo "Maintainer: Aseprite Team <support@aseprite.org>" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
           echo "Description: Animated sprite editor and pixel art tool" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
           echo "Depends: libc6, libx11-6, libfontconfig1, libgl1, libxrender1" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          dpkg-deb --build Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64
+          dpkg-deb --build \
+            Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64 \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
 
       - name: (Ubuntu) Build .AppImage
         if: matrix.os == 'ubuntu-latest'
@@ -266,7 +268,9 @@ jobs:
           cp $GITHUB_WORKSPACE/Ubuntu/aseprite.desktop Aseprite.AppDir
           cp $GITHUB_WORKSPACE/Ubuntu/aseprite.png Aseprite.AppDir
 
-          appimagetool Aseprite.AppDir
+          appimagetool \
+            Aseprite.AppDir \
+            Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
 
       - name: Clean up redundant files
         if: matrix.os == 'macOS-latest' || matrix.os == 'ubuntu-latest'
@@ -277,12 +281,13 @@ jobs:
           rm -rf data
         
       - name: Create release
+        if: matrix.os != 'ubuntu-latest'
         working-directory: aseprite/build
         run: |
           mv bin Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
           7z a -tzip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
       - name: Upload release
-        if: github.event_name != 'workflow_dispatch' && (((matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest') && matrix.arch == 'x64') || matrix.os == 'macOS-latest')
+        if: github.event_name != 'workflow_dispatch' && (matrix.os == 'windows-latest' || matrix.os == 'macOS-latest')
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -291,10 +296,44 @@ jobs:
           asset_path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
           asset_content_type: application/zip
+      - name: (Ubuntu) Upload Debian package
+        if: github.event_name != 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.check-version.outputs.upload_url }}
+          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
+          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
+          asset_content_type: application/vnd.debian.binary-package
+      - name: (Ubuntu) Upload AppImage
+        if: github.event_name != 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.check-version.outputs.upload_url }}
+          asset_path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
+          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
+          asset_content_type: application/octet-stream
       - name: Upload manual build artifact
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && matrix.os != 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
           path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
+          if-no-files-found: error
+      - name: (Ubuntu) Upload manual Debian artifact
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64-deb
+          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Ubuntu-amd64.deb
+          if-no-files-found: error
+      - name: (Ubuntu) Upload manual AppImage artifact
+        if: github.event_name == 'workflow_dispatch' && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64-AppImage
+          path: aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-Linux-x86_64.AppImage
           if-no-files-found: error
