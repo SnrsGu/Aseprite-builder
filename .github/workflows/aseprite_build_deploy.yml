@@ -4,254 +4,670 @@ on:
   schedule:
     - cron: '0 0 * * *'
   push:
-    branches: [ "main" ]
-  # pull_request:
-  #   branches: [ "main" ]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   BUILD_TYPE: Release
-  
+  SKIA_VERSION: m124-08a5439a6b
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/latest
+  BUILD_MACOS_APPLE_SILICON: 'true'
+  BUILD_MACOS_INTEL: 'true'
+  BUILD_WINDOWS_X64: 'true'
+  BUILD_WINDOWS_ARM64: 'true'
+  BUILD_LINUX_DEB_X64: 'true'
+  BUILD_LINUX_APPIMAGE_X64: 'true'
+  BUILD_LINUX_DEB_ARM64: 'true'
+  BUILD_LINUX_APPIMAGE_ARM64: 'true'
+  GH_REPO: ${{ github.repository }}
+
 jobs:
   check-version:
     name: Check latest Aseprite release
     runs-on: ubuntu-latest
     outputs:
-      download_url: ${{ steps.version_info.outputs.download_url }}
-      latest_tag: ${{ steps.version_info.outputs.latest_tag }}
-      should_build: ${{ steps.should_build.outputs.should_build }}
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      download_url: ${{ steps.version.outputs.download_url }}
+      latest_tag: ${{ steps.version.outputs.latest_tag }}
+      should_build: ${{ steps.decision.outputs.should_build }}
+      build_matrix: ${{ steps.matrix.outputs.build_matrix }}
+    steps:
+      - name: Get release information
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          data=$(curl --fail-with-body --silent --show-error --location \
+            --header "Accept: application/vnd.github+json" \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "${ASEPRITE_RELEASE_API_URL}")
+
+          tag=$(jq -er '.tag_name | select(type == "string" and length > 0)' <<<"${data}")
+          source_url=$(jq -er '
+            .assets[] |
+            select(.name | test("^Aseprite-v.*-Source\\.zip$")) |
+            .browser_download_url' <<<"${data}" | head -n 1)
+          notes=$(jq -r '.body // ""' <<<"${data}")
+
+          echo "latest_tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "download_url=${source_url}" >> "${GITHUB_OUTPUT}"
+          delimiter="ASEPRITE_NOTES_$(date +%s)_${RANDOM}"
+          echo "release_notes<<${delimiter}" >> "${GITHUB_OUTPUT}"
+          echo "${notes}" >> "${GITHUB_OUTPUT}"
+          echo "${delimiter}" >> "${GITHUB_OUTPUT}"
+          echo "${tag}" > aseprite-version.txt
+
+      - name: Check version cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: aseprite-version.txt
+          key: aseprite-release-${{ steps.version.outputs.latest_tag }}
+
+      - name: Decide whether to build
+        id: decision
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (steps.cache.outputs.cache-hit != 'true' &&
+           !contains(steps.version.outputs.latest_tag, 'beta') &&
+           !contains(steps.version.outputs.latest_tag, 'rc'))
+        run: echo "should_build=true" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure build matrix
+        id: matrix
+        env:
+          MACOS_ARM64: ${{ env.BUILD_MACOS_APPLE_SILICON }}
+          MACOS_X64: ${{ env.BUILD_MACOS_INTEL }}
+          WINDOWS_X64: ${{ env.BUILD_WINDOWS_X64 }}
+          WINDOWS_ARM64: ${{ env.BUILD_WINDOWS_ARM64 }}
+          LINUX_DEB_X64: ${{ env.BUILD_LINUX_DEB_X64 }}
+          LINUX_APPIMAGE_X64: ${{ env.BUILD_LINUX_APPIMAGE_X64 }}
+          LINUX_DEB_ARM64: ${{ env.BUILD_LINUX_DEB_ARM64 }}
+          LINUX_APPIMAGE_ARM64: ${{ env.BUILD_LINUX_APPIMAGE_ARM64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          matrix=$(jq -cn \
+            --argjson macos_arm64 "${MACOS_ARM64}" \
+            --argjson macos_x64 "${MACOS_X64}" \
+            --argjson windows_x64 "${WINDOWS_X64}" \
+            --argjson windows_arm64 "${WINDOWS_ARM64}" \
+            --argjson linux_deb_x64 "${LINUX_DEB_X64}" \
+            --argjson linux_appimage_x64 "${LINUX_APPIMAGE_X64}" \
+            --argjson linux_deb_arm64 "${LINUX_DEB_ARM64}" \
+            --argjson linux_appimage_arm64 "${LINUX_APPIMAGE_ARM64}" \
+            '{include: [
+              (if $macos_arm64 then {
+                id: "macos-arm64", name: "macOS Apple Silicon", os: "macos",
+                runner: "macos-15", arch: "arm64", cmake_arch: "arm64",
+                package_arch: "Apple-Silicon", skia_asset: "Skia-macOS-Release-arm64.zip",
+                source_skia: false
+              } else empty end),
+              (if $macos_x64 then {
+                id: "macos-x64", name: "macOS Intel", os: "macos",
+                runner: "macos-15-intel", arch: "x64", cmake_arch: "x86_64",
+                package_arch: "Intel", skia_asset: "Skia-macOS-Release-x64.zip",
+                source_skia: false
+              } else empty end),
+              (if $windows_x64 then {
+                id: "windows-x64", name: "Windows x64", os: "windows",
+                runner: "windows-latest", arch: "x64",
+                skia_asset: "Skia-Windows-Release-x64.zip", source_skia: false
+              } else empty end),
+              (if $windows_arm64 then {
+                id: "windows-arm64", name: "Windows ARM64", os: "windows",
+                runner: "windows-11-arm", arch: "arm64", source_skia: true
+              } else empty end),
+              (if ($linux_deb_x64 or $linux_appimage_x64) then {
+                id: "linux-x64", name: "Linux x64", os: "linux",
+                runner: "ubuntu-24.04", arch: "x64", deb_arch: "amd64",
+                appimage_arch: "x86_64", skia_asset: "Skia-Linux-Release-x64.zip",
+                source_skia: false, build_deb: $linux_deb_x64,
+                build_appimage: $linux_appimage_x64
+              } else empty end),
+              (if ($linux_deb_arm64 or $linux_appimage_arm64) then {
+                id: "linux-arm64", name: "Linux ARM64", os: "linux",
+                runner: "ubuntu-24.04-arm", arch: "arm64", deb_arch: "arm64",
+                appimage_arch: "aarch64", source_skia: true,
+                build_deb: $linux_deb_arm64, build_appimage: $linux_appimage_arm64
+              } else empty end)
+            ]}')
+          if [[ "$(jq '.include | length' <<<"${matrix}")" -eq 0 ]]; then
+            echo "Select at least one build target." >&2
+            exit 1
+          fi
+          echo "build_matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          jq . <<<"${matrix}"
+
+      - name: Create GitHub release
+        if: steps.decision.outputs.should_build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.latest_tag }}
+          NOTES: ${{ steps.version.outputs.release_notes }}
+        shell: bash
+        run: |
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" --title "Release Aseprite ${TAG}" --notes "${NOTES}"
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.check-version.outputs.build_matrix) }}
 
     steps:
-    - name: Get latest version info
-      id: version_info
-      run: |
-        data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/224436097)
-        LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
-        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[].browser_download_url')
-        VERSION_INFO=$(echo "${data}" | jq -r '.body')
-        echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-        echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
-        echo "version_info<<EOF" >> $GITHUB_OUTPUT
-        echo "$VERSION_INFO" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "${LATEST_TAG}" > ${LATEST_TAG}.txt
-    - name: Load version from cache
-      id: version_check
-      uses: actions/cache@v3
-      with:
-        path: ${{ steps.version_info.outputs.latest_tag }}.txt
-        key: cached_version
-    - name: Should we start new build?
-      id: should_build
-      if: steps.version_check.outputs.cache-hit != 'true' && contains(steps.version_info.outputs.latest_tag, 'beta') == false && contains(steps.version_info.outputs.latest_tag, 'rc') == false
-      run: echo "should_build=true" >> $GITHUB_OUTPUT
-    - name: Create Release
-      id: create_release
-      if: steps.should_build.outputs.should_build
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.version_info.outputs.latest_tag }}
-        release_name: Release Aseprite ${{ steps.version_info.outputs.latest_tag }}
-        body: |
-          ${{ steps.version_info.outputs.version_info }}
-        draft: false
-        prerelease: false
-  
-  build-aseprite:
-    name: Build Aseprite
-    needs: check-version
-    if: ${{ needs.check-version.outputs.should_build }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [windows-latest, ubuntu-latest, macOS-latest]
-        arch: [x64]
-        include:
-          - os: macOS-latest
-            arch: arm64
-      fail-fast: false
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v2
-      - name: (Windows) Install dependencies
-        if: matrix.os == 'windows-latest' && matrix.arch == 'x64'
-        uses: seanmiddleditch/gha-setup-ninja@v3
-      - name: (Ubuntu) Install dependencies
-        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'x64'
-        run: sudo apt-get install -y g++ clang libc++-dev libc++abi-dev cmake ninja-build libx11-dev libxcursor-dev libxi-dev libgl1-mesa-dev libfontconfig1-dev fuse
-      - name: (macOS) Install dependencies
-        if: matrix.os == 'macOS-latest'
+      - name: Checkout packaging repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            g++ clang cmake ninja-build unzip curl git python3 \
+            libx11-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libgl1-mesa-dev libfontconfig1-dev file
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos'
         run: brew install ninja p7zip
-      - name: Get Skia from cache
+
+      - name: Install Windows Ninja
+        if: matrix.os == 'windows'
+        uses: seanmiddleditch/gha-setup-ninja@v3
+
+      - name: Configure Visual Studio x64 environment
+        if: matrix.id == 'windows-x64'
+        uses: seanmiddleditch/gha-setup-vsdevenv@v4
+
+      - name: Configure Visual Studio ARM64 environment
+        if: matrix.id == 'windows-arm64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Install x64 Python for legacy Skia tools
+        if: matrix.id == 'windows-arm64'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Restore Skia cache
         id: skia-cache
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: skia
-          key: skia-${{ matrix.os }}-${{ matrix.arch }}-cache
-      - name: Download Skia if not in cache (linux)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'ubuntu-latest'
+          key: skia-${{ env.SKIA_VERSION }}-${{ matrix.id }}-v2
+
+      - name: Download prebuilt Skia
+        if: steps.skia-cache.outputs.cache-hit != 'true' && !matrix.source_skia
+        env:
+          SKIA_ASSET: ${{ matrix.skia_asset }}
+        shell: bash
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64-libstdc++.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
-      - name: Download Skia if not in cache (macOS x64)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'macOS-latest' && matrix.arch == 'x64'
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            --output skia.zip \
+            "https://github.com/aseprite/skia/releases/download/${SKIA_VERSION}/${SKIA_ASSET}"
+          unzip -q skia.zip -d skia
+
+      - name: Fetch Skia ARM64 source and dependencies
+        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.source_skia
+        shell: bash
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
-      - name: Download Skia if not in cache (macOS arm64)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'macOS-latest' && matrix.arch == 'arm64'
+          set -euo pipefail
+          git clone --depth 1 --branch aseprite-m124 \
+            https://github.com/aseprite/skia.git skia
+          cd skia
+          if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            # m124 has no native Windows ARM64 GN package. Force its legacy
+            # downloader to fetch the Windows amd64 GN, which runs under
+            # Windows ARM64 emulation and can generate ARM64 Ninja files.
+            sed -i "s/platform.machine().lower()/'amd64'/" bin/fetch-gn
+            grep -Fq "['amd64']" bin/fetch-gn
+            python tools/git-sync-deps
+          else
+            python3 tools/git-sync-deps
+          fi
+
+      - name: Build Skia ARM64 on Linux
+        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.id == 'linux-arm64'
+        shell: bash
+        working-directory: skia
         run: |
-          curl -o Skia-${{ runner.os }}-Release-arm64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-arm64.zip
-          unzip Skia-${{ runner.os }}-Release-arm64.zip -d skia
-      - name: Download Skia if not in cache (Windows)
-        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.os == 'windows-latest'
+          set -euo pipefail
+          bin/gn gen out/Release-arm64 --args='is_debug=false is_official_build=true target_cpu="arm64" cc="clang" cxx="clang++" skia_use_system_expat=false skia_use_system_icu=false skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false skia_use_system_libwebp=false skia_use_system_zlib=false skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_subset_harfbuzz=true skia_use_system_freetype2=false skia_use_system_harfbuzz=false'
+          ninja -C out/Release-arm64 skia modules
+
+      - name: Build Skia ARM64 on Windows
+        if: steps.skia-cache.outputs.cache-hit != 'true' && matrix.id == 'windows-arm64'
+        shell: pwsh
+        working-directory: skia
         run: |
-          curl -o Skia-${{ runner.os }}-Release-X64.zip -L https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-${{ runner.os }}-Release-x64.zip
-          unzip Skia-${{ runner.os }}-Release-X64.zip -d skia
-      - name: Download Aseprite release
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsRootNative = & $vswhere -latest -property installationPath
+          $vsRoot = $vsRootNative -replace '\\', '/'
+          $clang = Join-Path $vsRootNative 'VC\Tools\Llvm\ARM64\bin\clang-cl.exe'
+          if (-not (Test-Path -LiteralPath $clang)) {
+            throw "Visual Studio ARM64 clang-cl was not found: $clang"
+          }
+          $clangVersionOutput = & $clang --version | Out-String
+          if ($clangVersionOutput -notmatch 'clang version\s+(\d+)\.') {
+            throw "Unable to determine clang-cl version: $clangVersionOutput"
+          }
+          $clangMajor = [int]$Matches[1]
+          if ($clangMajor -lt 19) {
+            throw "MSVC 14.44 STL requires clang-cl 19 or newer; found version $clangMajor."
+          }
+          $clangRoot = Split-Path (Split-Path $clang)
+          $clangResourceDir = (& $clang -print-resource-dir).Trim()
+          if (-not (Test-Path -LiteralPath $clangResourceDir)) {
+            throw "Clang resource directory does not exist: $clangResourceDir"
+          }
+          $clangVersion = Split-Path $clangResourceDir -Leaf
+          Write-Host "Using clang-cl: $clang"
+          Write-Host $clangVersionOutput
+          Write-Host "Using Clang resource version: $clangVersion"
+          $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\Include"
+          $sdkVersion = (Get-ChildItem -Directory $sdkRoot | Sort-Object Name -Descending | Select-Object -First 1).Name
+          $clangRoot = $clangRoot -replace '\\', '/'
+          $gnArgs = 'is_debug=false is_official_build=true target_cpu="arm64" is_trivial_abi=false ' +
+            "win_vc=`"$vsRoot/VC`" win_sdk=`"C:/Program Files (x86)/Windows Kits/10`" " +
+            "win_sdk_version=`"$sdkVersion`" clang_win=`"$clangRoot`" " +
+            "clang_win_version=`"$clangVersion`" " +
+            'skia_use_system_expat=false skia_use_system_icu=false ' +
+            'skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false ' +
+            'skia_use_system_libwebp=false skia_use_system_zlib=false ' +
+            'skia_use_freetype=true skia_use_harfbuzz=true skia_pdf_subset_harfbuzz=true ' +
+            'skia_use_system_freetype2=false skia_use_system_harfbuzz=false extra_cflags=["-MT"]'
+          & bin\gn.exe gen out\Release-arm64 "--args=$gnArgs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ninja -C out\Release-arm64 skia modules
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate Skia
+        shell: bash
         run: |
-          curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
-          unzip Aseprite-source.zip -d aseprite
+          test -d "skia/out/Release-${{ matrix.arch }}"
+          if [[ "${{ matrix.os }}" == "windows" ]]; then
+            test -f "skia/out/Release-${{ matrix.arch }}/skia.lib"
+          else
+            test -f "skia/out/Release-${{ matrix.arch }}/libskia.a"
+          fi
+
+      - name: Download Aseprite source
+        env:
+          SOURCE_URL: ${{ needs.check-version.outputs.download_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 --output aseprite-source.zip "${SOURCE_URL}"
+          unzip -q aseprite-source.zip -d aseprite
           mkdir -p aseprite/build
-      - name: (Windows) Set architecture for the produced binary
-        if: matrix.os == 'windows-latest'
-        shell: cmd
-        run: call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat" -arch=x64
-      - name: (Windows) Setting Visual Studio build environment variables and paths
-        if: matrix.os == 'windows-latest'
-        uses: seanmiddleditch/gha-setup-vsdevenv@v4
-      - name: (Windows) Run CMake
-        if: matrix.os == 'windows-latest'
+
+      - name: Patch x86-only SIMD detection for Windows ARM64
+        if: matrix.id == 'windows-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=aseprite/src/doc/primitives.cpp
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_WIN64)' "${file}")" -eq 3
+          sed -i '/^[[:space:]]*#if defined(__x86_64__) || defined(_WIN64)$/ s/defined(_WIN64)/defined(_M_X64)/' "${file}"
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_M_X64)' "${file}")" -eq 2
+          # The one remaining _WIN64 occurrence is the correct 64-bit pointer-size check.
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_WIN64)' "${file}")" -eq 1
+
+      - name: Validate Windows Ninja
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          if ($ninja -match '[\\/]depot_tools[\\/]') {
+            throw "Invalid depot_tools Ninja selected: $ninja"
+          }
+          Write-Host "Using Ninja: $ninja"
+          & $ninja --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Configure Aseprite on Windows
+        if: matrix.os == 'windows'
         working-directory: aseprite/build
         shell: cmd
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=..\..\skia -DSKIA_LIBRARY_DIR=..\..\skia\out\Release-x64 -DSKIA_LIBRARY=..\..\skia\out\Release-x64\skia.lib -DOPENSSL_ROOT_DIR=C:\OpenSSL -DOPENSSL_USE_STATIC_LIBS=TRUE -G Ninja ..
-      - name: (Ubuntu) Run CMake
-        if: matrix.os == 'ubuntu-latest'
+        run: >-
+          cmake
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+          -DLAF_BACKEND=skia
+          -DSKIA_DIR=%GITHUB_WORKSPACE%\skia
+          -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-${{ matrix.arch }}
+          -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-${{ matrix.arch }}\skia.lib
+          -DBUILD_SHARED_LIBS=OFF
+          -DUSE_SHARED_CURL=OFF
+          -DCURL_STATICLIB=ON
+          -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL:BOOL=TRUE
+          -DCMAKE_USE_OPENSSL=OFF
+          -DCMAKE_USE_LIBSSH2=OFF
+          -DCMAKE_USE_SCHANNEL=ON
+          -DCURL_USE_OPENSSL=OFF
+          -DCURL_USE_LIBSSH2=OFF
+          -DCURL_USE_SCHANNEL=ON
+          -G Ninja ..
+
+      - name: Validate Windows TLS configuration
+        if: matrix.os == 'windows'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-x64 -G Ninja ..
-      - name: (macOS x64) Run CMake
-        if: matrix.os == 'macOS-latest' && matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $cache = Get-Content -LiteralPath CMakeCache.txt
+          $expected = [ordered]@{
+            BUILD_SHARED_LIBS = 'OFF'
+            USE_SHARED_CURL = 'OFF'
+            CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = 'TRUE'
+            CMAKE_USE_OPENSSL = 'OFF'
+            CMAKE_USE_LIBSSH2 = 'OFF'
+            CMAKE_USE_SCHANNEL = 'ON'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $pattern = '^' + [regex]::Escape($entry.Key) + ':[^=]+=' + [regex]::Escape($entry.Value) + '$'
+            if (-not ($cache | Select-String -Pattern $pattern -Quiet)) {
+              throw "Unexpected CMake configuration: $($entry.Key) must be $($entry.Value)"
+            }
+          }
+
+      - name: Configure Aseprite on macOS
+        if: matrix.os == 'macos'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-x64 -DSKIA_LIBRARY=../../skia/out/Release-x64/libskia.a -G Ninja ..
-      - name: (macOS arm64) Run CMake
-        if: matrix.os == 'macOS-latest' && matrix.arch == 'arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake_arch="${{ matrix.cmake_arch }}"
+          deployment_target=10.14
+          png_arm_neon=off
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            deployment_target=11.0
+            png_arm_neon=on
+          fi
+          cmake \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_OSX_ARCHITECTURES="${cmake_arch}" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="${deployment_target}" \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk macosx --show-sdk-path)" \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR="${GITHUB_WORKSPACE}/skia" \
+            -DSKIA_LIBRARY_DIR="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}" \
+            -DSKIA_LIBRARY="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}/libskia.a" \
+            -DPNG_ARM_NEON:STRING="${png_arm_neon}" \
+            -G Ninja ..
+
+      - name: Configure Aseprite on Linux
+        if: matrix.os == 'linux'
         working-directory: aseprite/build
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DCMAKE_OSX_SYSROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk -DLAF_BACKEND=skia -DSKIA_DIR=../../skia -DSKIA_LIBRARY_DIR=../../skia/out/Release-arm64 -DSKIA_LIBRARY=../../skia/out/Release-arm64/libskia.a -DPNG_ARM_NEON:STRING=on -G Ninja ..
-        
-      - name: Run Ninja
+        shell: bash
+        run: |
+          set -euo pipefail
+          png_arm_neon=off
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            png_arm_neon=on
+          fi
+          CC=clang CXX=clang++ cmake \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_CXX_FLAGS:STRING=-stdlib=libstdc++ \
+            -DCMAKE_EXE_LINKER_FLAGS:STRING=-stdlib=libstdc++ \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR="${GITHUB_WORKSPACE}/skia" \
+            -DSKIA_LIBRARY_DIR="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}" \
+            -DSKIA_LIBRARY="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}/libskia.a" \
+            -DPNG_ARM_NEON:STRING="${png_arm_neon}" \
+            -G Ninja ..
+
+      - name: Build Aseprite
         working-directory: aseprite/build
         run: ninja aseprite
-      - name: Clean up build
+
+      - name: Remove build-only executables
         working-directory: aseprite/build/bin
         shell: bash
-        run: rm -f gen modp_b64_gen gen.exe gen.exe.manifest modp_b64_gen.exe modp_b64_gen.exe.manifest
-      - name: Add .ini file
+        run: |
+          rm -f gen modp_b64_gen gen.exe gen.exe.manifest \
+            modp_b64_gen.exe modp_b64_gen.exe.manifest
+
+      - name: Enable portable mode
         working-directory: aseprite/build/bin
+        shell: bash
         run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
-      - name: Add Multilingual
+
+      - name: Install current translations
         working-directory: aseprite/build/bin/data
         shell: bash
         run: |
+          set -euo pipefail
           rm -f strings/*.ini
-          curl -o strings-main.zip -L https://codeload.github.com/aseprite/strings/zip/refs/heads/main
-          unzip strings-main.zip -d strings-main
-          cp strings-main/strings-main/*.ini strings
-          rm -rf strings-main
-      - name: (Windows) Rename Executable File
-        if: matrix.os == 'windows-latest'
-        working-directory: aseprite/build/bin
-        run: ren aseprite.exe Aseprite.exe
+          curl --fail --location --retry 3 \
+            --output strings-main.zip \
+            https://codeload.github.com/aseprite/strings/zip/refs/heads/main
+          unzip -q strings-main.zip -d strings-main
+          cp strings-main/strings-main/*.ini strings/
+          rm -rf strings-main strings-main.zip
 
-      - name: (macOS) Make App
-        if: matrix.os == 'macOS-latest'
+      - name: Prepare Windows application
+        if: matrix.os == 'windows'
         working-directory: aseprite/build/bin
+        shell: pwsh
         run: |
-          mkdir -p Aseprite.app/Contents/MacOS
-          mkdir -p Aseprite.app/Contents/Resources
-          
-          cp aseprite Aseprite.app/Contents/MacOS
-          cp aseprite.ini Aseprite.app/Contents/Resources
-          cp -r data Aseprite.app/Contents/Resources
-          cp $GITHUB_WORKSPACE/macOS/Aseprite.icns Aseprite.app/Contents/Resources
-          cp $GITHUB_WORKSPACE/macOS/Document.icns Aseprite.app/Contents/Resources
-          cp $GITHUB_WORKSPACE/macOS/Extension.icns Aseprite.app/Contents/Resources
-          cp $GITHUB_WORKSPACE/macOS/Info.plist Aseprite.app/Contents
-          
-          CLEAN_VERSION=$(echo "${{ needs.check-version.outputs.latest_tag }}" | sed 's/^v//')
-          
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $CLEAN_VERSION" Aseprite.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $CLEAN_VERSION" Aseprite.app/Contents/Info.plist
+          Rename-Item -LiteralPath aseprite.exe -NewName Aseprite.exe
+          $opensslName = '(?i)^lib(?:crypto|ssl)-.*\.dll$'
+          $badDependencies = @()
+          $nativeBinaries = Get-ChildItem -File | Where-Object {
+            $_.Extension -in '.exe', '.dll' -and $_.Name -notmatch $opensslName
+          }
+          foreach ($binary in $nativeBinaries) {
+            $imports = dumpbin /dependents $binary.FullName | Out-String
+            $matches = [regex]::Matches(
+              $imports,
+              '(?im)^\s*(lib(?:crypto|ssl)-[^\s]+\.dll)\s*$'
+            )
+            foreach ($match in $matches) {
+              $badDependencies += "$($binary.Name) -> $($match.Groups[1].Value)"
+            }
+          }
+          if ($badDependencies.Count -gt 0) {
+            $badDependencies | ForEach-Object { Write-Error $_ }
+            throw 'Windows build unexpectedly depends on OpenSSL DLLs.'
+          }
+          Get-ChildItem -File | Where-Object { $_.Name -match $opensslName } | Remove-Item -Force
+          $headers = dumpbin /headers Aseprite.exe | Out-String
+          $machine = if ('${{ matrix.arch }}' -eq 'arm64') { 'AA64 machine' } else { '8664 machine' }
+          if ($headers -notmatch [regex]::Escape($machine)) {
+            throw "Aseprite.exe is not the requested ${{ matrix.arch }} architecture."
+          }
 
-          rm -f aseprite
-          rm -f aseprite.ini
-          rm -rf data
-        
-      - name: (Ubuntu) Build .deb package
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: aseprite/build/bin
-        run: |
-          mkdir -p Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/usr/bin
-          mkdir -p Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/usr/share/aseprite
-
-          cp aseprite Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/usr/bin
-          cp aseprite.ini Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/usr/share/aseprite
-          cp -r data Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/usr/share/aseprite
-
-          mkdir -p Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN
-          echo "Package: aseprite" > Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          CLEAN_VERSION=$(echo "${{ needs.check-version.outputs.latest_tag }}" | sed 's/^v//')
-          echo "Version: $CLEAN_VERSION" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          echo "Architecture: amd64" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          echo "Maintainer: Aseprite Team <support@aseprite.org>" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          echo "Description: Animated sprite editor and pixel art tool" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          echo "Depends: libc6, libx11-6, libfontconfig1, libgl1, libxrender1" >> Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64/DEBIAN/control
-          dpkg-deb --build Aseprite_${{ needs.check-version.outputs.latest_tag }}_amd64
-
-      - name: (Ubuntu) Build .AppImage
-        if: matrix.os == 'ubuntu-latest'
-        working-directory: aseprite/build/bin
-        run: |
-          curl -o appimagetool-x86_64.AppImage -L https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
-          
-          mkdir -p Aseprite.AppDir/usr/bin
-          mkdir -p Aseprite.AppDir/usr/share/aseprite
-          mkdir -p Aseprite.AppDir/usr/share/icons
-          mkdir -p Aseprite.AppDir/usr/share/applications
-
-          cp aseprite Aseprite.AppDir/usr/bin
-          cp aseprite.ini Aseprite.AppDir/usr/share/aseprite
-          cp -r data Aseprite.AppDir/usr/share/aseprite
-          cp data/icons/ase.ico Aseprite.AppDir/usr/share/icons
-          cp $GITHUB_WORKSPACE/Ubuntu/aseprite.desktop Aseprite.AppDir/usr/share/applications
-          cp $GITHUB_WORKSPACE/Ubuntu/aseprite.desktop Aseprite.AppDir
-          cp $GITHUB_WORKSPACE/Ubuntu/aseprite.png Aseprite.AppDir
-
-          appimagetool Aseprite.AppDir
-
-      - name: Clean up redundant files
-        if: matrix.os == 'macOS-latest' || matrix.os == 'ubuntu-latest'
-        working-directory: aseprite/build/bin
-        run: |
-          rm -f aseprite
-          rm -f aseprite.ini
-          rm -rf data
-        
-      - name: Create release
+      - name: Package Windows ZIP
+        if: matrix.os == 'windows'
         working-directory: aseprite/build
-        run: |
-          mv bin Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
-          7z a -tzip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}
-      - name: Upload release
-        if: ((matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest') && matrix.arch == 'x64') || matrix.os == 'macOS-latest'
-        uses: actions/upload-release-asset@v1
+        shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        run: |
+          $name = "Aseprite-$env:TAG-Windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory -Path "$env:GITHUB_WORKSPACE/dist", $name -Force | Out-Null
+          Copy-Item -Path bin/* -Destination $name -Recurse -Force
+          7z a -tzip "$env:GITHUB_WORKSPACE/dist/$name.zip" $name
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare macOS application bundle
+        if: matrix.os == 'macos'
+        working-directory: aseprite/build/bin
+        shell: bash
+        env:
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p Aseprite.app/Contents/MacOS Aseprite.app/Contents/Resources
+
+          # Newer Aseprite versions create the bundle during compilation.
+          # Older releases leave the executable and data at the top level.
+          if [[ ! -x Aseprite.app/Contents/MacOS/aseprite ]]; then
+            if [[ ! -x aseprite ]]; then
+              echo 'Neither the macOS app-bundle executable nor bin/aseprite was generated.' >&2
+              exit 1
+            fi
+            cp -L aseprite Aseprite.app/Contents/MacOS/aseprite
+            chmod +x Aseprite.app/Contents/MacOS/aseprite
+          fi
+          if [[ ! -d Aseprite.app/Contents/Resources/data ]]; then
+            if [[ ! -d data ]]; then
+              echo 'Neither the macOS app-bundle data nor bin/data was generated.' >&2
+              exit 1
+            fi
+            cp -RL data Aseprite.app/Contents/Resources/data
+          fi
+
+          cp aseprite.ini Aseprite.app/Contents/Resources/
+          cp "${GITHUB_WORKSPACE}/macOS/Aseprite.icns" Aseprite.app/Contents/Resources/
+          cp "${GITHUB_WORKSPACE}/macOS/Document.icns" Aseprite.app/Contents/Resources/
+          cp "${GITHUB_WORKSPACE}/macOS/Extension.icns" Aseprite.app/Contents/Resources/
+          cp "${GITHUB_WORKSPACE}/macOS/Info.plist" Aseprite.app/Contents/
+          clean_version="${TAG#v}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${clean_version}" Aseprite.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${clean_version}" Aseprite.app/Contents/Info.plist
+          actual_arch=$(lipo -archs Aseprite.app/Contents/MacOS/aseprite)
+          if [[ "${actual_arch}" != "${{ matrix.cmake_arch }}" ]]; then
+            echo "Expected ${{ matrix.cmake_arch }} Mach-O, got ${actual_arch}" >&2
+            exit 1
+          fi
+          rm -f aseprite aseprite.ini
+          if [[ -L data ]]; then
+            rm data
+          elif [[ -d data ]]; then
+            rm -rf data
+          else
+            rm -f data
+          fi
+
+      - name: Package macOS ZIP
+        if: matrix.os == 'macos'
+        shell: bash
+        env:
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          name="Aseprite-${TAG}-macOS-${{ matrix.package_arch }}"
+          ditto -c -k --sequesterRsrc --keepParent \
+            aseprite/build/bin/Aseprite.app "dist/${name}.zip"
+
+      - name: Build Linux Debian package
+        if: matrix.os == 'linux' && matrix.build_deb
+        working-directory: aseprite/build/bin
+        shell: bash
+        env:
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+          binary_info=$(file aseprite)
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            grep -q 'ARM aarch64' <<<"${binary_info}"
+          else
+            grep -q 'x86-64' <<<"${binary_info}"
+          fi
+          package="Aseprite-${TAG}-Linux-deb-${{ matrix.deb_arch }}"
+          root="${package}-root"
+          mkdir -p "${root}/usr/bin" "${root}/usr/share/aseprite" "${root}/DEBIAN"
+          install -m 755 aseprite "${root}/usr/bin/aseprite"
+          install -m 644 aseprite.ini "${root}/usr/share/aseprite/aseprite.ini"
+          cp -R data "${root}/usr/share/aseprite/data"
+          cat > "${root}/DEBIAN/control" <<EOF
+          Package: aseprite
+          Version: ${TAG#v}
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: Aseprite Team <support@aseprite.org>
+          Depends: libc6, libx11-6, libfontconfig1, libgl1, libxrender1
+          Description: Animated sprite editor and pixel art tool
+          EOF
+          dpkg-deb --root-owner-group --build "${root}" "${package}.deb"
+          mkdir -p "${GITHUB_WORKSPACE}/dist"
+          tar -czf "${GITHUB_WORKSPACE}/dist/${package}.tar.gz" "${package}.deb"
+
+      - name: Upload successful Debian package to GitHub release
+        if: matrix.os == 'linux' && matrix.build_deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/*-Linux-deb-*.tar.gz --clobber
+
+      - name: Build Linux AppImage
+        if: matrix.os == 'linux' && matrix.build_appimage
+        working-directory: aseprite/build/bin
+        shell: bash
+        env:
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        run: |
+          set -euo pipefail
+          appdir=Aseprite.AppDir
+          mkdir -p "${appdir}/usr/bin" "${appdir}/usr/share/aseprite" \
+            "${appdir}/usr/share/icons/hicolor/256x256/apps" \
+            "${appdir}/usr/share/applications"
+          install -m 755 aseprite "${appdir}/usr/bin/aseprite"
+          install -m 644 aseprite.ini "${appdir}/usr/share/aseprite/aseprite.ini"
+          cp -R data "${appdir}/usr/share/aseprite/data"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.desktop" \
+            "${appdir}/usr/share/applications/aseprite.desktop"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.desktop" "${appdir}/aseprite.desktop"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.png" \
+            "${appdir}/usr/share/icons/hicolor/256x256/apps/aseprite.png"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.png" "${appdir}/aseprite.png"
+          ln -s usr/bin/aseprite "${appdir}/AppRun"
+          ln -s aseprite.png "${appdir}/.DirIcon"
+
+          tool="appimagetool-${{ matrix.appimage_arch }}.AppImage"
+          curl --fail --location --retry 3 --output "${tool}" \
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/${tool}"
+          chmod +x "${tool}"
+          output="Aseprite-${TAG}-Linux-AppImage-${{ matrix.appimage_arch }}.AppImage"
+          ARCH="${{ matrix.appimage_arch }}" APPIMAGE_EXTRACT_AND_RUN=1 \
+            "./${tool}" "${appdir}" "${output}"
+          tar -czf "${GITHUB_WORKSPACE}/dist/${output%.AppImage}.tar.gz" "${output}"
+
+      - name: Upload successful AppImage package to GitHub release
+        if: matrix.os == 'linux' && matrix.build_appimage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/*-Linux-AppImage-*.tar.gz --clobber
+
+      - name: List packaged files
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -maxdepth 1 -type f -print
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 1
+
+      - name: Upload successful packages to GitHub release
+        if: matrix.os != 'linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/* --clobber
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
         with:
-          upload_url: ${{ needs.check-version.outputs.upload_url }}
-          asset_path: aseprite/build/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
-          asset_name: Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}-${{ matrix.arch }}.zip
-          asset_content_type: application/zip
+          name: packages-${{ matrix.id }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
