@@ -13,15 +13,15 @@ permissions:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
-  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/224436097
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/315198174
   BUILD_MACOS_APPLE_SILICON: 'true'
   BUILD_MACOS_INTEL: 'true'
-  BUILD_WINDOWS_X64: 'false'
-  BUILD_WINDOWS_ARM64: 'false'
-  BUILD_LINUX_DEB_X64: 'false'
-  BUILD_LINUX_APPIMAGE_X64: 'false'
-  BUILD_LINUX_DEB_ARM64: 'false'
-  BUILD_LINUX_APPIMAGE_ARM64: 'false'
+  BUILD_WINDOWS_X64: 'true'
+  BUILD_WINDOWS_ARM64: 'true'
+  BUILD_LINUX_DEB_X64: 'true'
+  BUILD_LINUX_APPIMAGE_X64: 'true'
+  BUILD_LINUX_DEB_ARM64: 'true'
+  BUILD_LINUX_APPIMAGE_ARM64: 'true'
   GH_REPO: ${{ github.repository }}
 
 jobs:
