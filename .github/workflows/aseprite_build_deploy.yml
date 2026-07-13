@@ -10,11 +10,11 @@ on:
       macos_apple_silicon:
         description: Build macOS Apple Silicon ZIP
         type: boolean
-        default: true
+        default: false
       macos_intel:
         description: Build macOS Intel ZIP
         type: boolean
-        default: true
+        default: false
       windows_x64:
         description: Build Windows x64 ZIP
         type: boolean
@@ -26,19 +26,19 @@ on:
       linux_deb_x64:
         description: Build Linux x64 Debian package
         type: boolean
-        default: true
+        default: false
       linux_appimage_x64:
         description: Build Linux x64 AppImage
         type: boolean
-        default: true
+        default: false
       linux_deb_arm64:
         description: Build Linux ARM64 Debian package
         type: boolean
-        default: true
+        default: false
       linux_appimage_arm64:
         description: Build Linux ARM64 AppImage
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -46,6 +46,7 @@ permissions:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/269266772
   GH_REPO: ${{ github.repository }}
 
 jobs:
@@ -69,7 +70,7 @@ jobs:
             --header "Accept: application/vnd.github+json" \
             --header "Authorization: Bearer ${GH_TOKEN}" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/aseprite/aseprite/releases/269266772)
+            "${ASEPRITE_RELEASE_API_URL}")
 
           tag=$(jq -er '.tag_name | select(type == "string" and length > 0)' <<<"${data}")
           source_url=$(jq -er '
@@ -341,6 +342,18 @@ jobs:
           curl --fail --location --retry 3 --output aseprite-source.zip "${SOURCE_URL}"
           unzip -q aseprite-source.zip -d aseprite
           mkdir -p aseprite/build
+
+      - name: Patch x86-only SIMD detection for Windows ARM64
+        if: matrix.id == 'windows-arm64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          file=aseprite/src/doc/primitives.cpp
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_WIN64)' "${file}")" -eq 3
+          sed -i '/^[[:space:]]*#if defined(__x86_64__) || defined(_WIN64)$/ s/defined(_WIN64)/defined(_M_X64)/' "${file}"
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_M_X64)' "${file}")" -eq 2
+          # The one remaining _WIN64 occurrence is the correct 64-bit pointer-size check.
+          test "$(grep -Fc 'defined(__x86_64__) || defined(_WIN64)' "${file}")" -eq 1
 
       - name: Validate Windows Ninja
         if: matrix.os == 'windows'

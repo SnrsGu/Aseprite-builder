@@ -9,7 +9,7 @@
 | 工作流选项 | 输出文件 | 验证状态 |
 | --- | --- | --- |
 | macOS Apple Silicon | `Aseprite-<版本>-macOS-Apple-Silicon.zip` | ✅ 已验证 |
-| macOS Intel | `Aseprite-<版本>-macOS-Intel.zip` | 🟡 待验证 |
+| macOS Intel | `Aseprite-<版本>-macOS-Intel.zip` | ✅ 已验证 |
 | Windows x64 | `Aseprite-<版本>-Windows-x64.zip` | ✅ 已验证 |
 | Windows ARM64 | `Aseprite-<版本>-Windows-arm64.zip` | 🟡 待验证 |
 | Linux x64 Debian | `Aseprite-<版本>-Linux-deb-amd64.tar.gz` | 🟡 待验证 |
@@ -115,9 +115,10 @@ workflow_dispatch:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/latest
 ```
 
-Aseprite 版本来源配置在 **Get release information** 步骤。如果修改 Aseprite 源码版本，需要确认该版本要求的 Skia 与 `SKIA_VERSION` 一致。
+Aseprite 版本来源由 `ASEPRITE_RELEASE_API_URL` 配置。如果修改 Aseprite 源码版本，需要确认该版本要求的 Skia 与 `SKIA_VERSION` 一致。
 
 Linux 图标和桌面文件位于 [`Linux/`](Linux/)，macOS Bundle 资源位于 [`macOS/`](macOS/)。
 

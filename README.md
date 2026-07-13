@@ -9,7 +9,7 @@ This repository builds portable Aseprite packages with GitHub Actions. A manual 
 | Workflow option | Output | Validation status |
 | --- | --- | --- |
 | macOS Apple Silicon | `Aseprite-<version>-macOS-Apple-Silicon.zip` | ✅ Verified working |
-| macOS Intel | `Aseprite-<version>-macOS-Intel.zip` | 🟡 Pending validation |
+| macOS Intel | `Aseprite-<version>-macOS-Intel.zip` | ✅ Verified working |
 | Windows x64 | `Aseprite-<version>-Windows-x64.zip` | ✅ Verified working |
 | Windows ARM64 | `Aseprite-<version>-Windows-arm64.zip` | 🟡 Pending validation |
 | Linux x64 Debian | `Aseprite-<version>-Linux-deb-amd64.tar.gz` | 🟡 Pending validation |
@@ -115,9 +115,10 @@ The most commonly changed values are at the top of the workflow:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/latest
 ```
 
-The Aseprite release queried by the workflow is configured in the **Get release information** step. If you change the Aseprite source version, verify that its required Skia version matches `SKIA_VERSION`.
+The Aseprite release queried by the workflow is configured with `ASEPRITE_RELEASE_API_URL`. If you change the Aseprite source version, verify that its required Skia version matches `SKIA_VERSION`.
 
 Linux icons and desktop metadata are stored in [`Linux/`](Linux/). macOS bundle resources are stored in [`macOS/`](macOS/).
 
