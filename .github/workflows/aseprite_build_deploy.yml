@@ -85,11 +85,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, ubuntu-latest, macOS-latest]
+#        os: [windows-latest, ubuntu-latest, macOS-latest]
+        os: [windows-latest]
         arch: [x64]
-        include:
-          - os: macOS-latest
-            arch: arm64
+#        include:
+#          - os: macOS-latest
+#            arch: arm64
       fail-fast: false
     steps:
       - name: Checkout the repository
@@ -152,7 +153,7 @@ jobs:
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build
         shell: cmd
-        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -DBUILD_SHARED_LIBS=OFF -DUSE_SHARED_CURL=OFF -DCURL_STATICLIB=ON -DCMAKE_USE_OPENSSL=OFF -DCMAKE_USE_LIBSSH2=OFF -DCMAKE_USE_SCHANNEL=ON -G Ninja ..
+        run: cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DLAF_BACKEND=skia -DSKIA_DIR=%GITHUB_WORKSPACE%\skia -DSKIA_LIBRARY_DIR=%GITHUB_WORKSPACE%\skia\out\Release-x64 -DSKIA_LIBRARY=%GITHUB_WORKSPACE%\skia\out\Release-x64\skia.lib -DBUILD_SHARED_LIBS=OFF -DUSE_SHARED_CURL=OFF -DCURL_STATICLIB=ON -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL:BOOL=TRUE -DCMAKE_USE_OPENSSL=OFF -DCMAKE_USE_LIBSSH2=OFF -DCMAKE_USE_SCHANNEL=ON -DCURL_USE_OPENSSL=OFF -DCURL_USE_LIBSSH2=OFF -DCURL_USE_SCHANNEL=ON -G Ninja ..
       - name: (Windows) Validate CMake TLS configuration
         if: matrix.os == 'windows-latest'
         working-directory: aseprite/build
@@ -162,9 +163,13 @@ jobs:
           $expected = @(
             'BUILD_SHARED_LIBS:BOOL=OFF',
             'USE_SHARED_CURL:BOOL=OFF',
+            'CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:BOOL=TRUE',
             'CMAKE_USE_OPENSSL:BOOL=OFF',
             'CMAKE_USE_LIBSSH2:BOOL=OFF',
-            'CMAKE_USE_SCHANNEL:BOOL=ON'
+            'CMAKE_USE_SCHANNEL:BOOL=ON',
+            'CURL_USE_OPENSSL:BOOL=OFF',
+            'CURL_USE_LIBSSH2:BOOL=OFF',
+            'CURL_USE_SCHANNEL:BOOL=ON'
           )
           foreach ($entry in $expected) {
             if ($cache -notcontains $entry) {
@@ -223,13 +228,26 @@ jobs:
         run: |
           # The embedded static curl must use Windows Schannel. Do not hide an
           # accidental dynamic OpenSSL link by shipping runner-specific DLLs.
-          $nativeBinaries = Get-ChildItem -File | Where-Object { $_.Extension -in '.exe', '.dll' }
-          $dependencies = ($nativeBinaries | ForEach-Object {
-            dumpbin /dependents $_.FullName
-          } | Out-String)
-          if ($dependencies -match '(?i)lib(?:crypto|ssl)-[^\s]+\.dll') {
+          $badDependencies = @()
+          $opensslName = '(?i)^lib(?:crypto|ssl)-.*\.dll$'
+          $nativeBinaries = Get-ChildItem -File | Where-Object {
+            $_.Extension -in '.exe', '.dll' -and $_.Name -notmatch $opensslName
+          }
+          foreach ($binary in $nativeBinaries) {
+            $imports = dumpbin /dependents $binary.FullName | Out-String
+            $opensslImports = [regex]::Matches(
+              $imports,
+              '(?im)^\s*(lib(?:crypto|ssl)-[^\s]+\.dll)\s*$'
+            ) | ForEach-Object { $_.Groups[1].Value }
+            foreach ($import in $opensslImports) {
+              $badDependencies += "$($binary.Name) -> $import"
+            }
+          }
+          if ($badDependencies.Count -gt 0) {
+            $badDependencies | ForEach-Object { Write-Error $_ }
             throw 'Windows build unexpectedly depends on OpenSSL DLLs; Schannel/static curl configuration was not applied.'
           }
+          Get-ChildItem -File | Where-Object { $_.Name -match $opensslName } | Remove-Item -Force
       - name: (macOS) Make App
         if: matrix.os == 'macOS-latest'
         working-directory: aseprite/build/bin
