@@ -6,6 +6,39 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      macos_apple_silicon:
+        description: Build macOS Apple Silicon ZIP
+        type: boolean
+        default: true
+      macos_intel:
+        description: Build macOS Intel ZIP
+        type: boolean
+        default: true
+      windows_x64:
+        description: Build Windows x64 ZIP
+        type: boolean
+        default: true
+      windows_arm64:
+        description: Build Windows ARM64 ZIP
+        type: boolean
+        default: true
+      linux_deb_x64:
+        description: Build Linux x64 Debian package
+        type: boolean
+        default: true
+      linux_appimage_x64:
+        description: Build Linux x64 AppImage
+        type: boolean
+        default: true
+      linux_deb_arm64:
+        description: Build Linux ARM64 Debian package
+        type: boolean
+        default: true
+      linux_appimage_arm64:
+        description: Build Linux ARM64 AppImage
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -23,6 +56,7 @@ jobs:
       download_url: ${{ steps.version.outputs.download_url }}
       latest_tag: ${{ steps.version.outputs.latest_tag }}
       should_build: ${{ steps.decision.outputs.should_build }}
+      build_matrix: ${{ steps.matrix.outputs.build_matrix }}
     steps:
       - name: Get release information
         id: version
@@ -68,6 +102,72 @@ jobs:
            !contains(steps.version.outputs.latest_tag, 'rc'))
         run: echo "should_build=true" >> "${GITHUB_OUTPUT}"
 
+      - name: Configure build matrix
+        id: matrix
+        env:
+          MACOS_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.macos_apple_silicon }}
+          MACOS_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.macos_intel }}
+          WINDOWS_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.windows_x64 }}
+          WINDOWS_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.windows_arm64 }}
+          LINUX_DEB_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_deb_x64 }}
+          LINUX_APPIMAGE_X64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_appimage_x64 }}
+          LINUX_DEB_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_deb_arm64 }}
+          LINUX_APPIMAGE_ARM64: ${{ github.event_name != 'workflow_dispatch' || inputs.linux_appimage_arm64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          matrix=$(jq -cn \
+            --argjson macos_arm64 "${MACOS_ARM64}" \
+            --argjson macos_x64 "${MACOS_X64}" \
+            --argjson windows_x64 "${WINDOWS_X64}" \
+            --argjson windows_arm64 "${WINDOWS_ARM64}" \
+            --argjson linux_deb_x64 "${LINUX_DEB_X64}" \
+            --argjson linux_appimage_x64 "${LINUX_APPIMAGE_X64}" \
+            --argjson linux_deb_arm64 "${LINUX_DEB_ARM64}" \
+            --argjson linux_appimage_arm64 "${LINUX_APPIMAGE_ARM64}" \
+            '{include: [
+              (if $macos_arm64 then {
+                id: "macos-arm64", name: "macOS Apple Silicon", os: "macos",
+                runner: "macos-15", arch: "arm64", cmake_arch: "arm64",
+                package_arch: "Apple-Silicon", skia_asset: "Skia-macOS-Release-arm64.zip",
+                source_skia: false
+              } else empty end),
+              (if $macos_x64 then {
+                id: "macos-x64", name: "macOS Intel", os: "macos",
+                runner: "macos-15-intel", arch: "x64", cmake_arch: "x86_64",
+                package_arch: "Intel", skia_asset: "Skia-macOS-Release-x64.zip",
+                source_skia: false
+              } else empty end),
+              (if $windows_x64 then {
+                id: "windows-x64", name: "Windows x64", os: "windows",
+                runner: "windows-latest", arch: "x64",
+                skia_asset: "Skia-Windows-Release-x64.zip", source_skia: false
+              } else empty end),
+              (if $windows_arm64 then {
+                id: "windows-arm64", name: "Windows ARM64", os: "windows",
+                runner: "windows-11-arm", arch: "arm64", source_skia: true
+              } else empty end),
+              (if ($linux_deb_x64 or $linux_appimage_x64) then {
+                id: "linux-x64", name: "Linux x64", os: "linux",
+                runner: "ubuntu-24.04", arch: "x64", deb_arch: "amd64",
+                appimage_arch: "x86_64", skia_asset: "Skia-Linux-Release-x64.zip",
+                source_skia: false, build_deb: $linux_deb_x64,
+                build_appimage: $linux_appimage_x64
+              } else empty end),
+              (if ($linux_deb_arm64 or $linux_appimage_arm64) then {
+                id: "linux-arm64", name: "Linux ARM64", os: "linux",
+                runner: "ubuntu-24.04-arm", arch: "arm64", deb_arch: "arm64",
+                appimage_arch: "aarch64", source_skia: true,
+                build_deb: $linux_deb_arm64, build_appimage: $linux_appimage_arm64
+              } else empty end)
+            ]}')
+          if [[ "$(jq '.include | length' <<<"${matrix}")" -eq 0 ]]; then
+            echo "Select at least one build target." >&2
+            exit 1
+          fi
+          echo "build_matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+          jq . <<<"${matrix}"
+
       - name: Create GitHub release
         if: steps.decision.outputs.should_build == 'true'
         env:
@@ -88,56 +188,7 @@ jobs:
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: macos-arm64
-            name: macOS Apple Silicon
-            os: macos
-            runner: macos-15
-            arch: arm64
-            cmake_arch: arm64
-            package_arch: Apple-Silicon
-            skia_asset: Skia-macOS-Release-arm64.zip
-            source_skia: false
-          - id: macos-x64
-            name: macOS Intel
-            os: macos
-            runner: macos-15-intel
-            arch: x64
-            cmake_arch: x86_64
-            package_arch: Intel
-            skia_asset: Skia-macOS-Release-x64.zip
-            source_skia: false
-          - id: windows-x64
-            name: Windows x64
-            os: windows
-            runner: windows-latest
-            arch: x64
-            skia_asset: Skia-Windows-Release-x64.zip
-            source_skia: false
-          - id: windows-arm64
-            name: Windows ARM64
-            os: windows
-            runner: windows-11-arm
-            arch: arm64
-            source_skia: true
-          - id: linux-x64
-            name: Linux x64
-            os: linux
-            runner: ubuntu-24.04
-            arch: x64
-            deb_arch: amd64
-            appimage_arch: x86_64
-            skia_asset: Skia-Linux-Release-x64.zip
-            source_skia: false
-          - id: linux-arm64
-            name: Linux ARM64
-            os: linux
-            runner: ubuntu-24.04-arm
-            arch: arm64
-            deb_arch: arm64
-            appimage_arch: aarch64
-            source_skia: true
+      matrix: ${{ fromJSON(needs.check-version.outputs.build_matrix) }}
 
     steps:
       - name: Checkout packaging repository
@@ -204,9 +255,6 @@ jobs:
           set -euo pipefail
           git clone --depth 1 --branch aseprite-m124 \
             https://github.com/aseprite/skia.git skia
-          git clone --depth 1 \
-            https://chromium.googlesource.com/chromium/tools/depot_tools.git depot_tools
-          echo "${GITHUB_WORKSPACE}/depot_tools" >> "${GITHUB_PATH}"
           cd skia
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             # m124 has no native Windows ARM64 GN package. Force its legacy
@@ -293,6 +341,18 @@ jobs:
           curl --fail --location --retry 3 --output aseprite-source.zip "${SOURCE_URL}"
           unzip -q aseprite-source.zip -d aseprite
           mkdir -p aseprite/build
+
+      - name: Validate Windows Ninja
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $ninja = (Get-Command ninja.exe -ErrorAction Stop).Source
+          if ($ninja -match '[\\/]depot_tools[\\/]') {
+            throw "Invalid depot_tools Ninja selected: $ninja"
+          }
+          Write-Host "Using Ninja: $ninja"
+          & $ninja --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Configure Aseprite on Windows
         if: matrix.os == 'windows'
@@ -496,7 +556,7 @@ jobs:
             aseprite/build/bin/Aseprite.app "dist/${name}.zip"
 
       - name: Build Linux Debian package
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && matrix.build_deb
         working-directory: aseprite/build/bin
         shell: bash
         env:
@@ -528,7 +588,7 @@ jobs:
           tar -czf "${GITHUB_WORKSPACE}/dist/${package}.tar.gz" "${package}.deb"
 
       - name: Upload successful Debian package to GitHub release
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && matrix.build_deb
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check-version.outputs.latest_tag }}
@@ -536,7 +596,7 @@ jobs:
         run: gh release upload "${TAG}" dist/*-Linux-deb-*.tar.gz --clobber
 
       - name: Build Linux AppImage
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && matrix.build_appimage
         working-directory: aseprite/build/bin
         shell: bash
         env:
@@ -550,12 +610,12 @@ jobs:
           install -m 755 aseprite "${appdir}/usr/bin/aseprite"
           install -m 644 aseprite.ini "${appdir}/usr/share/aseprite/aseprite.ini"
           cp -R data "${appdir}/usr/share/aseprite/data"
-          install -m 644 "${GITHUB_WORKSPACE}/Ubuntu/aseprite.desktop" \
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.desktop" \
             "${appdir}/usr/share/applications/aseprite.desktop"
-          install -m 644 "${GITHUB_WORKSPACE}/Ubuntu/aseprite.desktop" "${appdir}/aseprite.desktop"
-          install -m 644 "${GITHUB_WORKSPACE}/Ubuntu/aseprite.png" \
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.desktop" "${appdir}/aseprite.desktop"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.png" \
             "${appdir}/usr/share/icons/hicolor/256x256/apps/aseprite.png"
-          install -m 644 "${GITHUB_WORKSPACE}/Ubuntu/aseprite.png" "${appdir}/aseprite.png"
+          install -m 644 "${GITHUB_WORKSPACE}/Linux/aseprite.png" "${appdir}/aseprite.png"
           ln -s usr/bin/aseprite "${appdir}/AppRun"
           ln -s aseprite.png "${appdir}/.DirIcon"
 
@@ -569,7 +629,7 @@ jobs:
           tar -czf "${GITHUB_WORKSPACE}/dist/${output%.AppImage}.tar.gz" "${output}"
 
       - name: Upload successful AppImage package to GitHub release
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && matrix.build_appimage
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check-version.outputs.latest_tag }}
