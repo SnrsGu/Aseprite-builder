@@ -13,15 +13,15 @@ permissions:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
-  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/311903051
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/224436097
   BUILD_MACOS_APPLE_SILICON: 'true'
   BUILD_MACOS_INTEL: 'true'
-  BUILD_WINDOWS_X64: 'true'
-  BUILD_WINDOWS_ARM64: 'true'
-  BUILD_LINUX_DEB_X64: 'true'
-  BUILD_LINUX_APPIMAGE_X64: 'true'
-  BUILD_LINUX_DEB_ARM64: 'true'
-  BUILD_LINUX_APPIMAGE_ARM64: 'true'
+  BUILD_WINDOWS_X64: 'false'
+  BUILD_WINDOWS_ARM64: 'false'
+  BUILD_LINUX_DEB_X64: 'false'
+  BUILD_LINUX_APPIMAGE_X64: 'false'
+  BUILD_LINUX_DEB_ARM64: 'false'
+  BUILD_LINUX_APPIMAGE_ARM64: 'false'
   GH_REPO: ${{ github.repository }}
 
 jobs:
@@ -514,8 +514,26 @@ jobs:
           TAG: ${{ needs.check-version.outputs.latest_tag }}
         run: |
           set -euo pipefail
-          test -x Aseprite.app/Contents/MacOS/aseprite
-          test -d Aseprite.app/Contents/Resources/data
+          mkdir -p Aseprite.app/Contents/MacOS Aseprite.app/Contents/Resources
+
+          # Newer Aseprite versions create the bundle during compilation.
+          # Older releases leave the executable and data at the top level.
+          if [[ ! -x Aseprite.app/Contents/MacOS/aseprite ]]; then
+            if [[ ! -x aseprite ]]; then
+              echo 'Neither the macOS app-bundle executable nor bin/aseprite was generated.' >&2
+              exit 1
+            fi
+            cp -L aseprite Aseprite.app/Contents/MacOS/aseprite
+            chmod +x Aseprite.app/Contents/MacOS/aseprite
+          fi
+          if [[ ! -d Aseprite.app/Contents/Resources/data ]]; then
+            if [[ ! -d data ]]; then
+              echo 'Neither the macOS app-bundle data nor bin/data was generated.' >&2
+              exit 1
+            fi
+            cp -RL data Aseprite.app/Contents/Resources/data
+          fi
+
           cp aseprite.ini Aseprite.app/Contents/Resources/
           cp "${GITHUB_WORKSPACE}/macOS/Aseprite.icns" Aseprite.app/Contents/Resources/
           cp "${GITHUB_WORKSPACE}/macOS/Document.icns" Aseprite.app/Contents/Resources/
@@ -529,7 +547,14 @@ jobs:
             echo "Expected ${{ matrix.cmake_arch }} Mach-O, got ${actual_arch}" >&2
             exit 1
           fi
-          rm -f aseprite aseprite.ini data
+          rm -f aseprite aseprite.ini
+          if [[ -L data ]]; then
+            rm data
+          elif [[ -d data ]]; then
+            rm -rf data
+          else
+            rm -f data
+          fi
 
       - name: Package macOS ZIP
         if: matrix.os == 'macos'
