@@ -13,7 +13,7 @@ permissions:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
-  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/290567443
+  ASEPRITE_RELEASE_API_URL: https://api.github.com/repos/aseprite/aseprite/releases/311903051
   BUILD_MACOS_APPLE_SILICON: 'true'
   BUILD_MACOS_INTEL: 'true'
   BUILD_WINDOWS_X64: 'true'
