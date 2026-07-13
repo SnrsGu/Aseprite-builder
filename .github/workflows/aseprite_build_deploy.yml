@@ -95,6 +95,7 @@ jobs:
             runner: macos-15
             arch: arm64
             cmake_arch: arm64
+            package_arch: Apple-Silicon
             skia_asset: Skia-macOS-Release-arm64.zip
             source_skia: false
           - id: macos-x64
@@ -103,6 +104,7 @@ jobs:
             runner: macos-15-intel
             arch: x64
             cmake_arch: x86_64
+            package_arch: Intel
             skia_asset: Skia-macOS-Release-x64.zip
             source_skia: false
           - id: windows-x64
@@ -174,6 +176,13 @@ jobs:
         with:
           version: '18.1'
 
+      - name: Install x64 Python for legacy Skia tools
+        if: matrix.id == 'windows-arm64'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: x64
+
       - name: Restore Skia cache
         id: skia-cache
         uses: actions/cache@v4
@@ -205,6 +214,7 @@ jobs:
           echo "${GITHUB_WORKSPACE}/depot_tools" >> "${GITHUB_PATH}"
           cd skia
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
+            python -c "import platform; assert platform.machine() in ('AMD64', 'x86_64'), platform.machine()"
             python tools/git-sync-deps
             python bin/fetch-ninja
           else
@@ -318,10 +328,10 @@ jobs:
           set -euo pipefail
           cmake_arch="${{ matrix.cmake_arch }}"
           deployment_target=10.14
-          extra_args=()
+          png_arm_neon=off
           if [[ "${{ matrix.arch }}" == "arm64" ]]; then
             deployment_target=11.0
-            extra_args+=("-DPNG_ARM_NEON:STRING=on")
+            png_arm_neon=on
           fi
           cmake \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -332,7 +342,7 @@ jobs:
             -DSKIA_DIR="${GITHUB_WORKSPACE}/skia" \
             -DSKIA_LIBRARY_DIR="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}" \
             -DSKIA_LIBRARY="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}/libskia.a" \
-            "${extra_args[@]}" \
+            -DPNG_ARM_NEON:STRING="${png_arm_neon}" \
             -G Ninja ..
 
       - name: Configure Aseprite on Linux
@@ -341,9 +351,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          extra_args=()
+          png_arm_neon=off
           if [[ "${{ matrix.arch }}" == "arm64" ]]; then
-            extra_args+=("-DPNG_ARM_NEON:STRING=on")
+            png_arm_neon=on
           fi
           CC=clang CXX=clang++ cmake \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
@@ -353,7 +363,7 @@ jobs:
             -DSKIA_DIR="${GITHUB_WORKSPACE}/skia" \
             -DSKIA_LIBRARY_DIR="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}" \
             -DSKIA_LIBRARY="${GITHUB_WORKSPACE}/skia/out/Release-${{ matrix.arch }}/libskia.a" \
-            "${extra_args[@]}" \
+            -DPNG_ARM_NEON:STRING="${png_arm_neon}" \
             -G Ninja ..
 
       - name: Build Aseprite
@@ -463,7 +473,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          name="Aseprite-${TAG}-macOS-${{ matrix.arch }}"
+          name="Aseprite-${TAG}-macOS-${{ matrix.package_arch }}"
           ditto -c -k --sequesterRsrc --keepParent \
             aseprite/build/bin/Aseprite.app "dist/${name}.zip"
 
@@ -499,6 +509,14 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/dist"
           tar -czf "${GITHUB_WORKSPACE}/dist/${package}.tar.gz" "${package}.deb"
 
+      - name: Upload successful Debian package to GitHub release
+        if: matrix.os == 'linux' && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/*-Linux-deb-*.tar.gz --clobber
+
       - name: Build Linux AppImage
         if: matrix.os == 'linux'
         working-directory: aseprite/build/bin
@@ -532,12 +550,28 @@ jobs:
             "./${tool}" "${appdir}" "${output}"
           tar -czf "${GITHUB_WORKSPACE}/dist/${output%.AppImage}.tar.gz" "${output}"
 
+      - name: Upload successful AppImage package to GitHub release
+        if: matrix.os == 'linux' && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/*-Linux-AppImage-*.tar.gz --clobber
+
       - name: List packaged files
         shell: bash
         run: |
           set -euo pipefail
           find dist -maxdepth 1 -type f -print
           test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 1
+
+      - name: Upload successful packages to GitHub release
+        if: matrix.os != 'linux' && github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check-version.outputs.latest_tag }}
+        shell: bash
+        run: gh release upload "${TAG}" dist/* --clobber
 
       - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
@@ -546,32 +580,3 @@ jobs:
           path: dist/*
           if-no-files-found: error
           compression-level: 0
-
-  publish:
-    name: Publish release assets
-    needs: [check-version, build]
-    if: >-
-      needs.check-version.outputs.should_build == 'true' &&
-      github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all packaged artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: packages-*
-          path: dist
-          merge-multiple: true
-
-      - name: Verify complete release set
-        shell: bash
-        run: |
-          set -euo pipefail
-          find dist -maxdepth 1 -type f -print | sort
-          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 8
-
-      - name: Upload assets to GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.check-version.outputs.latest_tag }}
-        shell: bash
-        run: gh release upload "${TAG}" dist/* --clobber
