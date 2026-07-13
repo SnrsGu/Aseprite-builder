@@ -249,14 +249,12 @@ jobs:
         if: matrix.os == 'macOS-latest'
         working-directory: aseprite/build/bin
         run: |
-          mkdir -p Aseprite.app/Contents/MacOS
-          mkdir -p Aseprite.app/Contents/Resources
-          
-          if [[ ! -f Aseprite.app/Contents/MacOS/aseprite ]]; then
-            cp aseprite Aseprite.app/Contents/MacOS
-          fi
+          # Current Aseprite builds a complete macOS bundle. The top-level
+          # aseprite and data entries are symlinks back into this bundle.
+          test -x Aseprite.app/Contents/MacOS/aseprite
+          test -d Aseprite.app/Contents/Resources/data
+
           cp aseprite.ini Aseprite.app/Contents/Resources
-          cp -r data Aseprite.app/Contents/Resources
           cp $GITHUB_WORKSPACE/macOS/Aseprite.icns Aseprite.app/Contents/Resources
           cp $GITHUB_WORKSPACE/macOS/Document.icns Aseprite.app/Contents/Resources
           cp $GITHUB_WORKSPACE/macOS/Extension.icns Aseprite.app/Contents/Resources
