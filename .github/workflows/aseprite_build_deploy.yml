@@ -68,7 +68,7 @@ jobs:
         run: echo "should_build=true" >> "${GITHUB_OUTPUT}"
 
       - name: Create GitHub release
-        if: steps.decision.outputs.should_build == 'true' && github.event_name != 'workflow_dispatch'
+        if: steps.decision.outputs.should_build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.latest_tag }}
@@ -214,7 +214,11 @@ jobs:
           echo "${GITHUB_WORKSPACE}/depot_tools" >> "${GITHUB_PATH}"
           cd skia
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
-            python -c "import platform; assert platform.machine() in ('AMD64', 'x86_64'), platform.machine()"
+            # m124 has no native Windows ARM64 GN package. Force its legacy
+            # downloader to fetch the Windows amd64 GN, which runs under
+            # Windows ARM64 emulation and can generate ARM64 Ninja files.
+            sed -i "s/platform.machine().lower()/'amd64'/" bin/fetch-gn
+            grep -Fq "['amd64']" bin/fetch-gn
             python tools/git-sync-deps
             python bin/fetch-ninja
           else
@@ -510,7 +514,7 @@ jobs:
           tar -czf "${GITHUB_WORKSPACE}/dist/${package}.tar.gz" "${package}.deb"
 
       - name: Upload successful Debian package to GitHub release
-        if: matrix.os == 'linux' && github.event_name != 'workflow_dispatch'
+        if: matrix.os == 'linux'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check-version.outputs.latest_tag }}
@@ -551,7 +555,7 @@ jobs:
           tar -czf "${GITHUB_WORKSPACE}/dist/${output%.AppImage}.tar.gz" "${output}"
 
       - name: Upload successful AppImage package to GitHub release
-        if: matrix.os == 'linux' && github.event_name != 'workflow_dispatch'
+        if: matrix.os == 'linux'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check-version.outputs.latest_tag }}
@@ -566,7 +570,7 @@ jobs:
           test "$(find dist -maxdepth 1 -type f | wc -l)" -ge 1
 
       - name: Upload successful packages to GitHub release
-        if: matrix.os != 'linux' && github.event_name != 'workflow_dispatch'
+        if: matrix.os != 'linux'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check-version.outputs.latest_tag }}
