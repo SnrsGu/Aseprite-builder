@@ -171,12 +171,6 @@ jobs:
         with:
           arch: arm64
 
-      - name: Install LLVM 18 for Windows ARM64 Skia
-        if: matrix.id == 'windows-arm64'
-        uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: '18.1'
-
       - name: Install x64 Python for legacy Skia tools
         if: matrix.id == 'windows-arm64'
         uses: actions/setup-python@v6
@@ -239,7 +233,21 @@ jobs:
         shell: pwsh
         working-directory: skia
         run: |
-          $clang = (Get-Command clang-cl.exe -ErrorAction Stop).Source
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsRootNative = & $vswhere -latest -property installationPath
+          $vsRoot = $vsRootNative -replace '\\', '/'
+          $clang = Join-Path $vsRootNative 'VC\Tools\Llvm\ARM64\bin\clang-cl.exe'
+          if (-not (Test-Path -LiteralPath $clang)) {
+            throw "Visual Studio ARM64 clang-cl was not found: $clang"
+          }
+          $clangVersionOutput = & $clang --version | Out-String
+          if ($clangVersionOutput -notmatch 'clang version\s+(\d+)\.') {
+            throw "Unable to determine clang-cl version: $clangVersionOutput"
+          }
+          $clangMajor = [int]$Matches[1]
+          if ($clangMajor -lt 19) {
+            throw "MSVC 14.44 STL requires clang-cl 19 or newer; found version $clangMajor."
+          }
           $clangRoot = Split-Path (Split-Path $clang)
           $clangResourceDir = (& $clang -print-resource-dir).Trim()
           if (-not (Test-Path -LiteralPath $clangResourceDir)) {
@@ -247,9 +255,8 @@ jobs:
           }
           $clangVersion = Split-Path $clangResourceDir -Leaf
           Write-Host "Using clang-cl: $clang"
+          Write-Host $clangVersionOutput
           Write-Host "Using Clang resource version: $clangVersion"
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $vsRoot = (& $vswhere -latest -property installationPath) -replace '\\', '/'
           $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\Include"
           $sdkVersion = (Get-ChildItem -Directory $sdkRoot | Sort-Object Name -Descending | Select-Object -First 1).Name
           $clangRoot = $clangRoot -replace '\\', '/'
