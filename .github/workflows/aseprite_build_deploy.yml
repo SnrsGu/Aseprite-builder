@@ -160,20 +160,18 @@ jobs:
         shell: pwsh
         run: |
           $cache = Get-Content -LiteralPath CMakeCache.txt
-          $expected = @(
-            'BUILD_SHARED_LIBS:BOOL=OFF',
-            'USE_SHARED_CURL:BOOL=OFF',
-            'CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:BOOL=TRUE',
-            'CMAKE_USE_OPENSSL:BOOL=OFF',
-            'CMAKE_USE_LIBSSH2:BOOL=OFF',
-            'CMAKE_USE_SCHANNEL:BOOL=ON',
-            'CURL_USE_OPENSSL:BOOL=OFF',
-            'CURL_USE_LIBSSH2:BOOL=OFF',
-            'CURL_USE_SCHANNEL:BOOL=ON'
-          )
-          foreach ($entry in $expected) {
-            if ($cache -notcontains $entry) {
-              throw "Unexpected CMake configuration: $entry was not found in CMakeCache.txt"
+          $expected = [ordered]@{
+            BUILD_SHARED_LIBS = 'OFF'
+            USE_SHARED_CURL = 'OFF'
+            CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = 'TRUE'
+            CMAKE_USE_OPENSSL = 'OFF'
+            CMAKE_USE_LIBSSH2 = 'OFF'
+            CMAKE_USE_SCHANNEL = 'ON'
+          }
+          foreach ($entry in $expected.GetEnumerator()) {
+            $pattern = '^' + [regex]::Escape($entry.Key) + ':[^=]+=' + [regex]::Escape($entry.Value) + '$'
+            if (-not ($cache | Select-String -Pattern $pattern -Quiet)) {
+              throw "Unexpected CMake configuration: $($entry.Key) must be $($entry.Value)"
             }
           }
       - name: (Ubuntu) Run CMake
