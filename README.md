@@ -2,7 +2,7 @@
 
 [中文说明](README.zh-CN.md)
 
-This repository builds portable Aseprite packages with GitHub Actions. A manual run can build any combination of the supported targets, while scheduled and `main` branch builds keep all targets enabled.
+This repository builds portable Aseprite packages with GitHub Actions. Manual, scheduled, and `main` branch builds all use the same platform configuration.
 
 ## Supported packages
 
@@ -29,48 +29,29 @@ Each Linux architecture is compiled only once when both Debian and AppImage are 
 6. Return to **Actions** and select **Build and deploy Aseprite**.
 7. Click **Run workflow**.
 8. Select the branch containing the workflow, normally `main`.
-9. Enable only the packages you need. At least one option must remain selected.
-10. Click the green **Run workflow** button.
+9. Click the green **Run workflow** button. The run uses the platform configuration committed to the selected branch.
 
 No custom secret or personal access token is required. The workflow uses the repository-provided `GITHUB_TOKEN`.
 
 ## Choose which platforms to build
 
-Open **Actions → Build and deploy Aseprite → Run workflow**. The form contains eight independent checkboxes:
-
-| Checkbox | Package that will be built |
-| --- | --- |
-| Build macOS Apple Silicon ZIP | macOS for Apple Silicon |
-| Build macOS Intel ZIP | macOS for Intel processors |
-| Build Windows x64 ZIP | Windows 64-bit for Intel/AMD processors |
-| Build Windows ARM64 ZIP | Windows for ARM64 processors |
-| Build Linux x64 Debian package | Debian package for Linux x64 |
-| Build Linux x64 AppImage | AppImage for Linux x64 |
-| Build Linux ARM64 Debian package | Debian package for Linux ARM64 |
-| Build Linux ARM64 AppImage | AppImage for Linux ARM64 |
-
-Uncheck every package you do not need, leave at least one checked, and then click **Run workflow**. For example:
-
-- To build only normal 64-bit Windows, leave only **Build Windows x64 ZIP** checked.
-- To build both Linux x64 formats, leave **Build Linux x64 Debian package** and **Build Linux x64 AppImage** checked. Aseprite is compiled once and both packages are produced from that build.
-- To build macOS for both processor families, enable both macOS checkboxes.
-
-All checkboxes default to enabled. To change the defaults shown in your fork, edit the corresponding `default` values under `on.workflow_dispatch.inputs` in [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml):
+Edit the global `env` section in [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml):
 
 ```yaml
-workflow_dispatch:
-  inputs:
-    windows_x64:
-      description: Build Windows x64 ZIP
-      type: boolean
-      default: true
-    windows_arm64:
-      description: Build Windows ARM64 ZIP
-      type: boolean
-      default: false
+env:
+  BUILD_MACOS_APPLE_SILICON: 'false'
+  BUILD_MACOS_INTEL: 'false'
+  BUILD_WINDOWS_X64: 'true'
+  BUILD_WINDOWS_ARM64: 'true'
+  BUILD_LINUX_DEB_X64: 'false'
+  BUILD_LINUX_APPIMAGE_X64: 'false'
+  BUILD_LINUX_DEB_ARM64: 'false'
+  BUILD_LINUX_APPIMAGE_ARM64: 'false'
 ```
 
-The checkboxes control manual runs only. Scheduled runs and pushes to `main` intentionally build all supported targets.
+Set a target to the quoted string `'true'` to build it or `'false'` to skip it. At least one target must be `true`. This single configuration applies to manual runs, scheduled runs, and pushes to `main`.
+
+For example, to build only Windows x64, set only `BUILD_WINDOWS_X64` to `'true'`. To produce both Linux x64 formats, enable both `BUILD_LINUX_DEB_X64` and `BUILD_LINUX_APPIMAGE_X64`; Aseprite is compiled once and both packages are created from that build.
 
 ## Where to find the results
 
@@ -91,9 +72,9 @@ The workflow also runs:
 - once per day on its configured schedule;
 - after a push to `main`.
 
-Automatic runs enable every supported package. Version caching prevents scheduled runs from rebuilding the same stable Aseprite release. Prerelease tags containing `beta` or `rc` are ignored by automatic runs. A manual run always starts a build with the selected targets.
+All runs build the targets enabled by `BUILD_*`. Version caching prevents scheduled runs from rebuilding the same stable Aseprite release. Prerelease tags containing `beta` or `rc` are ignored by automatic runs. A manual run always starts a build with the same committed configuration.
 
-To build only selected platforms automatically, edit the trigger or the matrix configuration in [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml). The checkboxes apply to manual `workflow_dispatch` runs.
+To change platforms for any trigger, edit the `BUILD_*` constants in [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml).
 
 ## Build implementation
 

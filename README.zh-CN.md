@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-本项目通过 GitHub Actions 编译并打包便携版 Aseprite。手动运行时可以任意选择需要的平台和格式；定时构建以及 `main` 分支推送构建默认启用全部目标。
+本项目通过 GitHub Actions 编译并打包便携版 Aseprite。手动运行、定时运行以及 `main` 分支推送运行全部使用同一套平台配置。
 
 ## 支持的产物
 
@@ -29,48 +29,29 @@
 6. 返回 **Actions**，选择 **Build and deploy Aseprite**。
 7. 点击 **Run workflow**。
 8. 选择包含工作流的分支，通常为 `main`。
-9. 只勾选自己需要的产物，至少需要保留一个选项。
-10. 点击绿色的 **Run workflow** 按钮开始构建。
+9. 点击绿色的 **Run workflow** 按钮开始构建。任务会使用所选分支中已经提交的平台配置。
 
 不需要创建自定义 Secret 或个人访问令牌。工作流使用仓库自动提供的 `GITHUB_TOKEN`。
 
 ## 选择需要打包的平台
 
-打开 **Actions → Build and deploy Aseprite → Run workflow**，运行表单中会显示 8 个相互独立的复选框：
-
-| 复选框 | 对应产物 |
-| --- | --- |
-| Build macOS Apple Silicon ZIP | Apple Silicon 芯片版 macOS |
-| Build macOS Intel ZIP | Intel 芯片版 macOS |
-| Build Windows x64 ZIP | Intel/AMD 处理器使用的 Windows 64 位版 |
-| Build Windows ARM64 ZIP | ARM64 处理器使用的 Windows 版 |
-| Build Linux x64 Debian package | Linux x64 Debian 安装包 |
-| Build Linux x64 AppImage | Linux x64 AppImage |
-| Build Linux ARM64 Debian package | Linux ARM64 Debian 安装包 |
-| Build Linux ARM64 AppImage | Linux ARM64 AppImage |
-
-取消勾选不需要的产物，至少保留一个选项，然后点击 **Run workflow**。例如：
-
-- 只构建常规 Windows 64 位版：只保留 **Build Windows x64 ZIP**。
-- 同时构建 Linux x64 的两种格式：保留 **Build Linux x64 Debian package** 和 **Build Linux x64 AppImage**。Aseprite 只编译一次，再从同一结果生成两种安装包。
-- 同时构建两种 macOS 架构：勾选两个 macOS 选项。
-
-所有复选框默认启用。如果需要修改自己 Fork 中显示的默认选择，请编辑 [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml) 中 `on.workflow_dispatch.inputs` 对应项目的 `default`：
+编辑 [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml) 的全局 `env`：
 
 ```yaml
-workflow_dispatch:
-  inputs:
-    windows_x64:
-      description: Build Windows x64 ZIP
-      type: boolean
-      default: true
-    windows_arm64:
-      description: Build Windows ARM64 ZIP
-      type: boolean
-      default: false
+env:
+  BUILD_MACOS_APPLE_SILICON: 'false'
+  BUILD_MACOS_INTEL: 'false'
+  BUILD_WINDOWS_X64: 'true'
+  BUILD_WINDOWS_ARM64: 'true'
+  BUILD_LINUX_DEB_X64: 'false'
+  BUILD_LINUX_APPIMAGE_X64: 'false'
+  BUILD_LINUX_DEB_ARM64: 'false'
+  BUILD_LINUX_APPIMAGE_ARM64: 'false'
 ```
 
-这些复选框只控制手动运行。定时任务和向 `main` 分支推送时仍会构建全部支持的目标。
+需要构建的目标设置为带引号的字符串 `'true'`，不需要的目标设置为 `'false'`，并且至少保留一个 `true`。这套配置同时应用于手动运行、定时运行和向 `main` 分支推送。
+
+例如，只构建 Windows x64 时，仅将 `BUILD_WINDOWS_X64` 设为 `'true'`。如果需要同时生成 Linux x64 的 Debian 和 AppImage，则同时启用 `BUILD_LINUX_DEB_X64` 与 `BUILD_LINUX_APPIMAGE_X64`；Aseprite 只会编译一次。
 
 ## 获取构建结果
 
@@ -91,9 +72,9 @@ workflow_dispatch:
 - 按现有定时配置每天运行一次；
 - 向 `main` 分支推送后运行。
 
-自动运行会启用全部支持的产物。版本缓存会避免定时任务重复构建同一个稳定版 Aseprite；包含 `beta` 或 `rc` 的预发布版本不会被自动构建。手动运行始终会按照所选目标开始构建。
+所有运行都会构建 `BUILD_*` 中启用的产物。版本缓存会避免定时任务重复构建同一个稳定版 Aseprite；包含 `beta` 或 `rc` 的预发布版本不会被自动构建。手动运行同样使用已经提交的这套配置。
 
-如果需要让自动构建也只编译指定平台，请编辑 [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml) 中的触发器或矩阵配置。页面复选框仅用于手动 `workflow_dispatch` 运行。
+无论使用哪一种触发方式，都通过 [`.github/workflows/aseprite_build_deploy.yml`](.github/workflows/aseprite_build_deploy.yml) 中的 `BUILD_*` 常量修改平台。
 
 ## 构建实现
 
