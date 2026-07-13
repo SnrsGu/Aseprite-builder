@@ -13,6 +13,7 @@ permissions:
 env:
   BUILD_TYPE: Release
   SKIA_VERSION: m124-08a5439a6b
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   check-version:
