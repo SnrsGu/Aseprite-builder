@@ -221,10 +221,8 @@ jobs:
             sed -i "s/platform.machine().lower()/'amd64'/" bin/fetch-gn
             grep -Fq "['amd64']" bin/fetch-gn
             python tools/git-sync-deps
-            python bin/fetch-ninja
           else
             python3 tools/git-sync-deps
-            python3 bin/fetch-ninja
           fi
 
       - name: Build Skia ARM64 on Linux
