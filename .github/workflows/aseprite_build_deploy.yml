@@ -241,6 +241,13 @@ jobs:
         run: |
           $clang = (Get-Command clang-cl.exe -ErrorAction Stop).Source
           $clangRoot = Split-Path (Split-Path $clang)
+          $clangResourceDir = (& $clang -print-resource-dir).Trim()
+          if (-not (Test-Path -LiteralPath $clangResourceDir)) {
+            throw "Clang resource directory does not exist: $clangResourceDir"
+          }
+          $clangVersion = Split-Path $clangResourceDir -Leaf
+          Write-Host "Using clang-cl: $clang"
+          Write-Host "Using Clang resource version: $clangVersion"
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vsRoot = (& $vswhere -latest -property installationPath) -replace '\\', '/'
           $sdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10\Include"
@@ -249,6 +256,7 @@ jobs:
           $gnArgs = 'is_debug=false is_official_build=true target_cpu="arm64" is_trivial_abi=false ' +
             "win_vc=`"$vsRoot/VC`" win_sdk=`"C:/Program Files (x86)/Windows Kits/10`" " +
             "win_sdk_version=`"$sdkVersion`" clang_win=`"$clangRoot`" " +
+            "clang_win_version=`"$clangVersion`" " +
             'skia_use_system_expat=false skia_use_system_icu=false ' +
             'skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false ' +
             'skia_use_system_libwebp=false skia_use_system_zlib=false ' +
